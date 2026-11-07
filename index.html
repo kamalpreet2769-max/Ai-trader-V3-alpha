@@ -159,6 +159,10 @@ summary{cursor:pointer;font-weight:700;font-size:13px;color:var(--fg-dim);text-t
       <label for="apiSecret">API secret</label>
       <input id="apiSecret" type="password" autocomplete="off" spellcheck="false" placeholder="paste API secret">
     </div>
+    <div class="field">
+      <label for="proxyUrl">Proxy address (needed if you see "Could not reach Binance")</label>
+      <input id="proxyUrl" type="text" autocomplete="off" spellcheck="false" placeholder="https://signal-desk-proxy.yourname.workers.dev">
+    </div>
     <div class="hint" style="margin-top:8px">
       Keys are saved only in this browser, on this phone, in this app's own storage. They are
       never sent anywhere except directly to Binance's servers to place your orders.
@@ -245,7 +249,7 @@ const KEY = "signaldesk.v1";
 function loadState(){ try{ return JSON.parse(localStorage.getItem(KEY)) || {}; }catch(e){ return {}; } }
 function saveState(s){ try{ localStorage.setItem(KEY, JSON.stringify(s)); }catch(e){} }
 let S = Object.assign({
-  live:false, apiKey:"", apiSecret:"", symbol:"BTCUSDT", interval:"1h",
+  live:false, apiKey:"", apiSecret:"", proxy:"", symbol:"BTCUSDT", interval:"1h",
   riskPct:0.5, dailyCap:2, maxDd:15, minEdge:0.10,
   equityPeak:null, dayDate:null, dayStartEquity:null, halted:false,
   trades:[], openPos:null
@@ -263,6 +267,7 @@ function fillForm(){
   document.getElementById("liveToggle").checked = !!S.live;
   document.getElementById("apiKey").value = S.apiKey || "";
   document.getElementById("apiSecret").value = S.apiSecret || "";
+  document.getElementById("proxyUrl").value = S.proxy || "";
   document.getElementById("symbol").value = S.symbol;
   document.getElementById("interval").value = S.interval;
   document.getElementById("riskPct").value = S.riskPct;
@@ -316,6 +321,7 @@ document.getElementById("saveBtn").addEventListener("click", ()=>{
   }
   S.apiKey = document.getElementById("apiKey").value.trim();
   S.apiSecret = document.getElementById("apiSecret").value.trim();
+  S.proxy = document.getElementById("proxyUrl").value.trim().replace(/\/+$/, "");
   S.symbol = document.getElementById("symbol").value;
   S.interval = document.getElementById("interval").value;
   S.riskPct = parseFloat(document.getElementById("riskPct").value) || 0.5;
@@ -337,7 +343,10 @@ document.getElementById("saveBtn").addEventListener("click", ()=>{
 });
 
 // ---------- Binance REST ----------
-function baseUrl(){ return S.live ? "https://api.binance.com" : "https://testnet.binance.vision"; }
+function baseUrl(){
+  if (S.proxy) return S.proxy + (S.live ? "/live" : "/testnet");   // relay that adds the CORS headers Binance leaves out
+  return S.live ? "https://api.binance.com" : "https://testnet.binance.vision";
+}
 
 async function hmacHex(secret, msg){
   const enc = new TextEncoder();
@@ -356,7 +365,12 @@ async function signedParams(params){
 
 async function netFetch(url, opts){
   try { return await fetch(url, opts); }
-  catch(e){ throw new Error("Could not reach Binance. Check your internet connection. If it is fine, your browser blocked the request (a CORS block) and this page cannot place orders from here."); }
+  catch(e){
+    let p = url; try { p = new URL(url).pathname; } catch(_){}
+    throw new Error("Could not reach Binance (" + p + "). " + (S.proxy
+      ? "Check the proxy address in settings and your internet connection."
+      : "If your internet works, the browser blocked the request (a CORS block). Set up the proxy and enter its address in settings."));
+  }
 }
 async function binancePublic(path, params){
   const qs = Object.keys(params||{}).map(k=>`${k}=${encodeURIComponent(params[k])}`).join("&");
@@ -652,12 +666,17 @@ async function analyzeAndTrade(){
 
   const slDist = CFG.slAtr * atrLast, tpDist = CFG.tpAtr * atrLast;
   const riskAmt = equity * (S.riskPct/100);
-  let qty = Math.min(riskAmt / slDist, quote / price);
+  let qty = Math.min(riskAmt / slDist, quote * 0.95 / price);   // keep 5% of cash back so price movement cannot make the order fail
   qty = roundToStep(qty, filters.stepSize);
   if (qty * price < filters.minNotional) { toast("Position size is below the exchange's minimum order. Increase risk % or add funds."); return; }
 
   const buy = await binanceSigned("/api/v3/order", { symbol:S.symbol, side:"BUY", type:"MARKET", quantity:qty }, "POST");
-  const fillPrice = buy.fills && buy.fills.length ? buy.fills.reduce((s,f)=>s+parseFloat(f.price)*parseFloat(f.qty),0)/qty : price;
+  const fills = buy.fills || [];
+  const boughtQty = fills.reduce((s,f)=>s+parseFloat(f.qty),0) || qty;
+  // Binance normally takes its fee out of the coins received, so we own slightly less than we bought.
+  const feeInBase = fills.reduce((s,f)=> s + (f.commissionAsset === filters.baseAsset ? parseFloat(f.commission || 0) : 0), 0);
+  const sellQty = roundToStep(boughtQty - feeInBase, filters.stepSize);
+  const fillPrice = fills.length ? fills.reduce((s,f)=>s+parseFloat(f.price)*parseFloat(f.qty),0)/boughtQty : price;
   const sl = roundToStep(fillPrice - slDist, filters.tickSize);
   const tp = roundToStep(fillPrice + tpDist, filters.tickSize);
   const slLimit = roundToStep(sl*0.998, filters.tickSize);
@@ -665,14 +684,14 @@ async function analyzeAndTrade(){
   try {
     // current Binance OCO endpoint: take-profit leg above, stop-loss-limit leg below
     await binanceSigned("/api/v3/orderList/oco", {
-      symbol:S.symbol, side:"SELL", quantity:qty,
+      symbol:S.symbol, side:"SELL", quantity:sellQty,
       aboveType:"LIMIT_MAKER", abovePrice: tp,
       belowType:"STOP_LOSS_LIMIT", belowStopPrice: sl, belowPrice: slLimit, belowTimeInForce:"GTC"
     }, "POST");
   } catch(e){
     // never leave a position without a stop: if protection fails, sell right away
     try {
-      await binanceSigned("/api/v3/order", { symbol:S.symbol, side:"SELL", type:"MARKET", quantity:qty }, "POST");
+      await binanceSigned("/api/v3/order", { symbol:S.symbol, side:"SELL", type:"MARKET", quantity:sellQty }, "POST");
       toast("The stop/target order was rejected (" + e.message + "), so the position was sold again right away. No trade is open.", true);
     } catch(e2){
       toast("DANGER: bought, but stop/target failed (" + e.message + ") and the emergency sell failed (" + e2.message + "). Close the position on the exchange now.", true);
@@ -680,16 +699,16 @@ async function analyzeAndTrade(){
     return;
   }
 
-  S.openPos = { entry: fillPrice, sl, tp, qty, openedAt: Date.now() };
+  S.openPos = { entry: fillPrice, sl, tp, qty: sellQty, openedAt: Date.now() };
   saveState(S);
   document.getElementById("posCard").hidden = false;
   document.getElementById("posEntry").textContent = fillPrice.toFixed(4);
   document.getElementById("posSl").textContent = sl.toFixed(4);
   document.getElementById("posTp").textContent = tp.toFixed(4);
-  document.getElementById("posQty").textContent = qty;
+  document.getElementById("posQty").textContent = sellQty;
   document.getElementById("sidePill").className = "sidepill long";
   document.getElementById("sidePill").textContent = "LONG";
-  toast(`Bought ${qty} ${filters.baseAsset} @ ${fillPrice.toFixed(4)}. Stop ${sl.toFixed(4)}, target ${tp.toFixed(4)}.`);
+  toast(`Bought ${sellQty} ${filters.baseAsset} @ ${fillPrice.toFixed(4)}. Stop ${sl.toFixed(4)}, target ${tp.toFixed(4)}.`);
 }
 
 async function flattenPosition(filters, base){
