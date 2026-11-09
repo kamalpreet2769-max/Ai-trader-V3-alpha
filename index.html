@@ -1,0 +1,981 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Signal Desk</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: sticky status bar, then stacked cards (market/signal, account, position, risk, history) -
+   a trading-desk readout, not a form. Primary accent is amber (ticker/terminal), green/red are
+   reserved strictly for P&L and never used as decoration. */
+:root{
+  --bg:#0b0e13; --surface:#12161f; --surface-2:#1a2029; --border:#262d3a;
+  --fg:#e7eaf0; --fg-dim:#8891a3; --fg-faint:#5a6376;
+  --accent:#e8a33d; --accent-dim:#5a4423;
+  --good:#3ddc84; --good-dim:#143826; --bad:#ef5a6f; --bad-dim:#3a1620;
+  --font-ui:'Manrope',system-ui,sans-serif; --font-data:'JetBrains Mono',ui-monospace,monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#f3f1ea; --surface:#fffdf8; --surface-2:#ece8dc; --border:#dcd6c4;
+    --fg:#1c1a15; --fg-dim:#6b6456; --fg-faint:#9b9484;
+    --accent:#a2641b; --accent-dim:#ead9ba;
+    --good:#1f8a53; --good-dim:#dcf0e3; --bad:#c0293f; --bad-dim:#f6dde1;
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#f3f1ea; --surface:#fffdf8; --surface-2:#ece8dc; --border:#dcd6c4;
+  --fg:#1c1a15; --fg-dim:#6b6456; --fg-faint:#9b9484;
+  --accent:#a2641b; --accent-dim:#ead9ba;
+  --good:#1f8a53; --good-dim:#dcf0e3; --bad:#c0293f; --bad-dim:#f6dde1;
+  color-scheme: light;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--fg); font-family:var(--font-ui);
+  padding-left:max(16px, env(safe-area-inset-left,0px)); padding-right:max(16px, env(safe-area-inset-right,0px));
+}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+.wrap{max-width:560px;margin:0 auto;padding-bottom:40px}
+a{color:var(--accent)}
+
+.topbar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);
+  padding:14px 0 10px;display:flex;align-items:center;justify-content:space-between;gap:10px;
+  border-bottom:1px solid var(--border)}
+.brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:17px;letter-spacing:.2px}
+.brand .dot{width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.modepill{font-family:var(--font-data);font-size:11px;font-weight:600;letter-spacing:.06em;
+  padding:4px 9px;border-radius:999px;border:1px solid var(--border);color:var(--fg-dim);white-space:nowrap}
+.modepill.live{color:var(--bad);border-color:var(--bad);background:var(--bad-dim)}
+.modepill.test{color:var(--accent);border-color:var(--accent-dim);background:var(--accent-dim)}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;margin-top:14px}
+.card h2{margin:0 0 12px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--fg-dim)}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+.row+.row{margin-top:10px}
+.label{color:var(--fg-dim);font-size:13px}
+.num{font-family:var(--font-data);font-variant-numeric:tabular-nums;font-weight:600}
+
+.bigrow{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.price{font-family:var(--font-data);font-size:30px;font-weight:700;font-variant-numeric:tabular-nums}
+.chg{font-family:var(--font-data);font-weight:600;font-size:14px}
+.chg.up{color:var(--good)} .chg.down{color:var(--bad)}
+
+.sidepill{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  padding:3px 9px;border-radius:999px}
+.sidepill.long{background:var(--good-dim);color:var(--good)}
+.sidepill.flat{background:var(--surface-2);color:var(--fg-faint)}
+.sidepill.halt{background:var(--bad-dim);color:var(--bad)}
+
+.bar{height:8px;border-radius:5px;background:var(--surface-2);overflow:hidden;margin-top:6px}
+.bar>i{display:block;height:100%;background:var(--accent);border-radius:5px}
+
+.btn{width:100%;padding:14px;border-radius:11px;border:1px solid var(--border);background:var(--surface-2);
+  color:var(--fg);font-family:var(--font-ui);font-weight:700;font-size:15px;cursor:pointer}
+.btn:active{transform:translateY(1px)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#1b1304}
+.btn.danger{background:var(--bad-dim);border-color:var(--bad);color:var(--bad)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+.field{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+.field label{font-size:12px;color:var(--fg-dim);font-weight:600}
+.field input,.field select{font-family:var(--font-data);font-size:14px;padding:10px 11px;border-radius:9px;
+  border:1px solid var(--border);background:var(--surface-2);color:var(--fg);width:100%}
+.field input:focus,.field select:focus,.btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.hint{font-size:12px;color:var(--fg-faint);line-height:1.5}
+.switchrow{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px}
+.switch{position:relative;width:42px;height:24px;flex:none}
+.switch input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer}
+.switch .track{position:absolute;inset:0;background:var(--surface-2);border:1px solid var(--border);border-radius:999px;transition:background .15s;pointer-events:none}
+.switch .knob{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--fg-faint);transition:transform .15s,background .15s;pointer-events:none}
+.switch input:checked + .track{background:var(--accent-dim)}
+.switch input:checked + .track + .knob{transform:translateX(18px);background:var(--accent)}
+
+.log{display:flex;flex-direction:column;gap:0}
+.logrow{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-top:1px solid var(--border);min-width:0}
+.logrow:first-child{border-top:none}
+.logleft{min-width:0}
+.logtime{font-size:11px;color:var(--fg-faint)}
+.logwhy{font-size:12px;color:var(--fg-dim)}
+.logpnl{font-family:var(--font-data);font-weight:700;white-space:nowrap}
+.logpnl.pos{color:var(--good)} .logpnl.neg{color:var(--bad)}
+.empty{color:var(--fg-faint);font-size:13px;padding:6px 0}
+.logpnl.open{color:var(--accent)}
+
+/* price chart: candles use the good/bad colours because up and down ARE the gain/loss story here */
+.chart{width:100%;height:auto;display:block;margin-top:12px;overflow:visible}
+.chart text{fill:var(--fg-dim);font-family:var(--font-data);font-size:10px}
+.chart .grid{stroke:var(--border);stroke-width:1}
+.chart .cu{fill:var(--good);stroke:var(--good);stroke-width:1}
+.chart .cd{fill:var(--bad);stroke:var(--bad);stroke-width:1}
+.chart .lvl{stroke-width:1.2;stroke-dasharray:5 4}
+.chart .lvl-entry{stroke:var(--fg-dim)} .chart .lvl-sl{stroke:var(--bad)} .chart .lvl-tp{stroke:var(--good)}
+.chart .tag-entry{fill:var(--fg-dim)} .chart .tag-sl{fill:var(--bad)} .chart .tag-tp{fill:var(--good)}
+.chart .mk-buy{fill:var(--accent);stroke:var(--bg);stroke-width:1.2}
+.chart .mk-sell{fill:var(--fg);stroke:var(--bg);stroke-width:1.2}
+.chart .mk-sell.neg{fill:var(--bad)} .chart .mk-sell.pos{fill:var(--good)}
+.chart .link{stroke-width:1.2;stroke-dasharray:2 3;opacity:.8}
+.chart .link.neg{stroke:var(--bad)} .chart .link.pos{stroke:var(--good)} .chart .link.flat{stroke:var(--fg-faint)}
+.seg{display:flex;gap:6px;margin-top:2px}
+.seg button{flex:1;padding:8px 0;border-radius:9px;border:1px solid var(--border);background:var(--surface-2);color:var(--fg-dim);
+  font-family:var(--font-data);font-size:12px;font-weight:600;cursor:pointer}
+.seg button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
+.seg button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:10px;font-size:12px;color:var(--fg-dim)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend svg{width:14px;height:10px;flex:none}
+
+.banner{border-radius:12px;padding:12px 14px;font-size:13px;line-height:1.5;margin-top:14px}
+.banner.warn{background:var(--accent-dim);color:var(--fg);border:1px solid var(--accent)}
+.banner.crit{background:var(--bad-dim);color:var(--fg);border:1px solid var(--bad)}
+.banner strong{color:var(--accent)}
+.banner.crit strong{color:var(--bad)}
+
+.toast{position:fixed;left:16px;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));
+  max-width:528px;margin:0 auto;background:var(--surface-2);border:1px solid var(--border);
+  color:var(--fg);padding:12px 14px;border-radius:11px;font-size:13px;z-index:20;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.toast.err{border-color:var(--bad);color:var(--bad)}
+[hidden]{display:none!important}
+summary{cursor:pointer;font-weight:700;font-size:13px;color:var(--fg-dim);text-transform:uppercase;letter-spacing:.06em}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.grid2 .field{margin-top:0}
+</style>
+<meta name="theme-color" content="#0b0e13">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="mobile-web-app-capable" content="yes">
+</head>
+<body>
+
+
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand"><span class="dot"></span>Signal Desk</div>
+    <span class="modepill test" id="modepill">TESTNET</span>
+  </div>
+
+  <div class="banner warn" id="disclaimer">
+    <strong>Read before trading.</strong> This places real orders on your exchange account when
+    you tap Analyze &amp; Trade. It only acts when you open the app and tap the button — it does
+    not watch the market on its own. Stop-loss and take-profit are placed on the exchange so your
+    position stays protected even after you close this page. Backtests and past results never
+    guarantee future profit. Start on testnet.
+  </div>
+
+  <div class="card" id="setupCard">
+    <h2>Connection</h2>
+    <div class="switchrow">
+      <div>
+        <div class="row" style="justify-content:flex-start;gap:8px"><strong>Live trading</strong></div>
+        <div class="hint">Off = Binance Testnet (fake money). On = your real account.</div>
+      </div>
+      <label class="switch"><input type="checkbox" id="liveToggle"><span class="track"></span><span class="knob"></span></label>
+    </div>
+    <div class="field">
+      <label for="apiKey">API key</label>
+      <input id="apiKey" type="text" autocomplete="off" spellcheck="false" placeholder="paste API key">
+    </div>
+    <div class="field">
+      <label for="apiSecret">API secret</label>
+      <input id="apiSecret" type="password" autocomplete="off" spellcheck="false" placeholder="paste API secret">
+    </div>
+    <div class="field">
+      <label for="proxyUrl">Proxy address (needed if you see "Could not reach Binance")</label>
+      <input id="proxyUrl" type="text" autocomplete="off" spellcheck="false" placeholder="https://signal-desk-proxy.yourname.workers.dev">
+    </div>
+    <div class="hint" style="margin-top:8px">
+      Keys are saved only in this browser, on this phone, in this app's own storage. They are
+      never sent anywhere except directly to Binance's servers to place your orders.
+      <span id="testnetHelp">Get free testnet keys at <a href="https://testnet.binance.vision" target="_blank" rel="noopener">testnet.binance.vision</a> (sign in with GitHub).</span>
+    </div>
+    <details style="margin-top:14px">
+      <summary>Risk settings</summary>
+      <div class="grid2" style="margin-top:12px">
+        <div class="field"><label for="symbol">Symbol</label>
+          <select id="symbol"><option>BTCUSDT</option><option>ETHUSDT</option><option>BNBUSDT</option><option>SOLUSDT</option></select>
+        </div>
+        <div class="field"><label for="interval">Candle</label>
+          <select id="interval"><option value="15m">15 min</option><option value="1h" selected>1 hour</option><option value="4h">4 hour</option></select>
+        </div>
+        <div class="field"><label for="riskPct">Risk / trade %</label><input id="riskPct" type="number" step="0.1" value="0.5"></div>
+        <div class="field"><label for="dailyCap">Daily loss cap %</label><input id="dailyCap" type="number" step="0.5" value="2"></div>
+        <div class="field"><label for="maxDd">Kill switch, drawdown %</label><input id="maxDd" type="number" step="1" value="15"></div>
+        <div class="field"><label for="minEdge">Min edge to trade (R)</label><input id="minEdge" type="number" step="0.01" value="0.10"></div>
+      </div>
+      <div class="hint" style="margin-top:10px">Stop-loss = 1 ATR away. Take-profit = 2 ATR away. These settings are saved with your keys.</div>
+    </details>
+    <button class="btn" id="saveBtn" style="margin-top:14px">Save settings</button>
+  </div>
+
+  <div class="card" id="mainCard" hidden>
+    <h2>Market &amp; signal</h2>
+    <div class="bigrow">
+      <span class="price" id="price">–</span>
+      <span class="chg" id="chg">–</span>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span class="label">Model read</span>
+      <span class="sidepill flat" id="sidePill">FLAT</span>
+    </div>
+    <div style="margin-top:12px">
+      <div class="row"><span class="label">P(long hits target first)</span><span class="num" id="probLong">–</span></div>
+      <div class="bar"><i id="barLong" style="width:0%"></i></div>
+    </div>
+    <div class="hint" id="signalWhy" style="margin-top:10px">Tap Analyze &amp; Trade to read the chart.</div>
+  </div>
+
+  <div class="card" id="chartCard" hidden>
+    <h2>Price chart</h2>
+    <div class="seg" id="rangeSeg" role="group" aria-label="Chart time range">
+      <button type="button" data-n="48">–</button>
+      <button type="button" data-n="120">–</button>
+      <button type="button" data-n="240">–</button>
+    </div>
+    <div id="chart"></div>
+    <div class="legend" id="legend">
+      <span><svg viewBox="0 0 14 10"><path d="M7 1 L13 9 L1 9 Z" fill="var(--accent)"/></svg>Buy</span>
+      <span><svg viewBox="0 0 14 10"><path d="M1 1 L13 1 L7 9 Z" fill="var(--fg)"/></svg>Sell</span>
+      <span><svg viewBox="0 0 14 10"><line x1="0" y1="5" x2="14" y2="5" stroke="var(--fg-dim)" stroke-width="2" stroke-dasharray="4 3"/></svg>Entry</span>
+      <span><svg viewBox="0 0 14 10"><line x1="0" y1="5" x2="14" y2="5" stroke="var(--good)" stroke-width="2" stroke-dasharray="4 3"/></svg>Target</span>
+      <span><svg viewBox="0 0 14 10"><line x1="0" y1="5" x2="14" y2="5" stroke="var(--bad)" stroke-width="2" stroke-dasharray="4 3"/></svg>Stop</span>
+    </div>
+    <div class="hint" id="chartNote" style="margin-top:8px"></div>
+  </div>
+
+  <button class="btn primary" id="analyzeBtn" hidden style="margin-top:14px">Analyze &amp; Trade</button>
+
+  <div class="card" id="accountCard" hidden>
+    <h2>Account</h2>
+    <div class="row"><span class="label">Trading balance</span><span class="num" id="equity">–</span></div>
+    <div class="row"><span class="label">Today</span><span class="num" id="dayPnl">–</span></div>
+    <div class="row"><span class="label">From peak</span><span class="num" id="drawdown">–</span></div>
+    <div class="hint" style="margin-top:10px">Your cash in the quote coin (USDT) plus the trade this app opened. Other coins in the account are ignored and never sold.</div>
+  </div>
+
+  <div class="card" id="posCard" hidden>
+    <h2>Open position</h2>
+    <div class="row"><span class="label">Entry</span><span class="num" id="posEntry">–</span></div>
+    <div class="row"><span class="label">Stop-loss</span><span class="num" id="posSl">–</span></div>
+    <div class="row"><span class="label">Take-profit</span><span class="num" id="posTp">–</span></div>
+    <div class="row"><span class="label">Quantity</span><span class="num" id="posQty">–</span></div>
+  </div>
+
+  <div class="card" id="historyCard" hidden>
+    <h2>Trade history</h2>
+    <div class="log" id="logList"><div class="empty">No closed trades yet.</div></div>
+    <div class="hint" style="margin-top:10px">Profit and loss here is the price move times quantity, before trading fees. Your Trading balance above is the real figure after fees.</div>
+  </div>
+
+  <div class="card">
+    <h2>What this does &amp; doesn't do</h2>
+    <div class="hint">
+      • Long only on spot — no shorting, no leverage, no margin.<br>
+      • Fires only when you tap the button, not continuously in the background.<br>
+      • Stop-loss and take-profit are real exchange orders, so they work even with the app closed.<br>
+      • A daily loss cap and a drawdown kill switch block new trades and flatten your position.<br>
+      • If your browser or network blocks Binance's API (CORS), live order calls will show an error here — testnet is the way to check that first.
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(function(){
+"use strict";
+
+// ---------- storage ----------
+const KEY = "signaldesk.v1";
+function loadState(){ try{ return JSON.parse(localStorage.getItem(KEY)) || {}; }catch(e){ return {}; } }
+function saveState(s){ try{ localStorage.setItem(KEY, JSON.stringify(s)); }catch(e){} }
+let S = Object.assign({
+  live:false, apiKey:"", apiSecret:"", proxy:"", symbol:"BTCUSDT", interval:"1h",
+  riskPct:0.5, dailyCap:2, maxDd:15, minEdge:0.10,
+  equityPeak:null, dayDate:null, dayStartEquity:null, halted:false,
+  trades:[], openPos:null
+}, loadState());
+// v2: equity now counts only cash + this app's own trade. Older saved baselines (which counted every coin
+// in the account) would look like a huge drawdown, so start them fresh once.
+if (S.eqBasis !== 2){
+  S.equityPeak = null; S.dayDate = null; S.dayStartEquity = null; S.halted = false; S.dayBlocked = false; S.eqBasis = 2;
+  saveState(S);
+}
+
+function toast(msg, isErr){
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.hidden = false; t.className = "toast" + (isErr ? " err" : "");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(()=>{ t.hidden = true; }, isErr ? 7000 : 4000);
+}
+
+// ---------- fill form from saved state ----------
+function fillForm(){
+  document.getElementById("liveToggle").checked = !!S.live;
+  document.getElementById("apiKey").value = S.apiKey || "";
+  document.getElementById("apiSecret").value = S.apiSecret || "";
+  document.getElementById("proxyUrl").value = S.proxy || "";
+  document.getElementById("symbol").value = S.symbol;
+  document.getElementById("interval").value = S.interval;
+  document.getElementById("riskPct").value = S.riskPct;
+  document.getElementById("dailyCap").value = S.dailyCap;
+  document.getElementById("maxDd").value = S.maxDd;
+  document.getElementById("minEdge").value = S.minEdge;
+  updateModePill();
+}
+function updateModePill(){
+  const p = document.getElementById("modepill");
+  p.textContent = S.live ? "LIVE" : "TESTNET";
+  p.className = "modepill " + (S.live ? "live" : "test");
+  document.getElementById("testnetHelp").hidden = !!S.live;
+}
+
+document.getElementById("liveToggle").addEventListener("change", (e)=>{
+  // confirm()/prompt() do nothing in this viewer, so live mode needs a typed phrase instead.
+  if (e.target.checked && !window.__typedLiveConfirm){
+    e.target.checked = false;
+    windowPromptFallback();
+    return;
+  }
+  updateModePill();
+});
+// confirm()/prompt() do nothing in this viewer, so live mode is armed by typing a phrase inline.
+function windowPromptFallback(){
+  const wrap = document.getElementById("setupCard");
+  let box = document.getElementById("liveConfirmBox");
+  if (box) return;
+  box = document.createElement("div");
+  box.id = "liveConfirmBox";
+  box.className = "banner crit";
+  box.innerHTML = 'This will place real orders with real money. Type <strong>I UNDERSTAND</strong> below, then switch Live trading on again.'+
+    '<div class="field"><input id="liveConfirmInput" type="text" placeholder="I UNDERSTAND"></div>';
+  wrap.insertBefore(box, wrap.firstChild.nextSibling);
+  document.getElementById("liveConfirmInput").addEventListener("input", (e)=>{
+    if (e.target.value.trim().toUpperCase() === "I UNDERSTAND"){
+      window.__typedLiveConfirm = true;
+      document.getElementById("liveToggle").checked = true;
+      updateModePill();
+      box.remove();
+      toast("Live trading armed. Save settings to confirm.");
+    }
+  });
+}
+
+document.getElementById("saveBtn").addEventListener("click", ()=>{
+  S.live = document.getElementById("liveToggle").checked && !!window.__typedLiveConfirm;
+  if (document.getElementById("liveToggle").checked && !window.__typedLiveConfirm){
+    document.getElementById("liveToggle").checked = false;
+  }
+  S.apiKey = document.getElementById("apiKey").value.trim();
+  S.apiSecret = document.getElementById("apiSecret").value.trim();
+  S.proxy = document.getElementById("proxyUrl").value.trim().replace(/\/+$/, "");
+  S.symbol = document.getElementById("symbol").value;
+  S.interval = document.getElementById("interval").value;
+  S.riskPct = parseFloat(document.getElementById("riskPct").value) || 0.5;
+  S.dailyCap = parseFloat(document.getElementById("dailyCap").value) || 2;
+  S.maxDd = parseFloat(document.getElementById("maxDd").value) || 15;
+  S.minEdge = parseFloat(document.getElementById("minEdge").value) || 0.10;
+  saveState(S);
+  updateModePill();
+  if (!S.apiKey || !S.apiSecret){
+    toast("Saved. Add API keys to enable Analyze & Trade.");
+  } else {
+    document.getElementById("mainCard").hidden = false;
+    document.getElementById("chartCard").hidden = false;
+    document.getElementById("analyzeBtn").hidden = false;
+    document.getElementById("accountCard").hidden = false;
+    document.getElementById("historyCard").hidden = false;
+    toast("Settings saved.");
+    refreshAccountAndHistory();
+    loadChart();
+  }
+});
+
+// ---------- Binance REST ----------
+function baseUrl(){
+  if (S.proxy) return S.proxy + (S.live ? "/live" : "/testnet");   // relay that adds the CORS headers Binance leaves out
+  return S.live ? "https://api.binance.com" : "https://testnet.binance.vision";
+}
+
+async function hmacHex(secret, msg){
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", enc.encode(secret), {name:"HMAC", hash:"SHA-256"}, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(msg));
+  return Array.from(new Uint8Array(sig)).map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+async function signedParams(params){
+  params.timestamp = Date.now();
+  params.recvWindow = 10000;
+  const qs = Object.keys(params).map(k=>`${k}=${encodeURIComponent(params[k])}`).join("&");
+  const sig = await hmacHex(S.apiSecret, qs);
+  return qs + "&signature=" + sig;
+}
+
+async function netFetch(url, opts){
+  try { return await fetch(url, opts); }
+  catch(e){
+    let p = url; try { p = new URL(url).pathname; } catch(_){}
+    throw new Error("Could not reach Binance (" + p + "). " + (S.proxy
+      ? "Check the proxy address in settings and your internet connection."
+      : "If your internet works, the browser blocked the request (a CORS block). Set up the proxy and enter its address in settings."));
+  }
+}
+async function binancePublic(path, params){
+  const qs = Object.keys(params||{}).map(k=>`${k}=${encodeURIComponent(params[k])}`).join("&");
+  const res = await netFetch(`${baseUrl()}${path}${qs?("?"+qs):""}`);
+  if (!res.ok) throw new Error(`${path} failed: HTTP ${res.status}`);
+  return res.json();
+}
+async function binanceSigned(path, params, method){
+  const qs = await signedParams(Object.assign({}, params));
+  const inQuery = !method || method === "GET" || method === "DELETE";   // GET/DELETE carry parameters in the address; POST in the body
+  const url = `${baseUrl()}${path}${inQuery?("?"+qs):""}`;
+  const opts = { method: method||"GET", headers: { "X-MBX-APIKEY": S.apiKey } };
+  if (!inQuery){
+    opts.body = qs; opts.headers["Content-Type"] = "application/x-www-form-urlencoded";
+  }
+  const res = await netFetch(url, opts);
+  const body = await res.json().catch(()=>({}));
+  if (!res.ok) throw new Error(body.msg || `${path} failed: HTTP ${res.status}`);
+  return body;
+}
+
+// ---------- math: EMA / ATR / RSI / ADX / features (same formulas as the Python/desktop version) ----------
+function ewm(x, alpha){ const y = new Array(x.length); y[0] = x[0];
+  for (let i=1;i<x.length;i++) y[i] = alpha*x[i] + (1-alpha)*y[i-1]; return y; }
+function rollMean(x, n){ const y = new Array(x.length).fill(NaN);
+  for (let i=n-1;i<x.length;i++){ let s=0; for(let k=i-n+1;k<=i;k++) s+=x[k]; y[i]=s/n; } return y; }
+function rollStd(x, n){ const m = rollMean(x,n); const y = new Array(x.length).fill(NaN);
+  for (let i=n-1;i<x.length;i++){ let s=0; for(let k=i-n+1;k<=i;k++) s+=(x[k]-m[i])**2; y[i]=Math.sqrt(s/n); } return y; }
+function rollMax(x, n){ const y=new Array(x.length).fill(NaN);
+  for(let i=n-1;i<x.length;i++){ let mx=-Infinity; for(let k=i-n+1;k<=i;k++) mx=Math.max(mx,x[k]); y[i]=mx; } return y; }
+function rollMin(x, n){ const y=new Array(x.length).fill(NaN);
+  for(let i=n-1;i<x.length;i++){ let mn=Infinity; for(let k=i-n+1;k<=i;k++) mn=Math.min(mn,x[k]); y[i]=mn; } return y; }
+
+function computeAll(candles, cfg){
+  const n = candles.length;
+  const o=candles.map(c=>c.o), h=candles.map(c=>c.h), l=candles.map(c=>c.l), c=candles.map(c=>c.c), v=candles.map(c=>c.v);
+  const tr = new Array(n); tr[0] = h[0]-l[0];
+  for (let i=1;i<n;i++) tr[i] = Math.max(h[i]-l[i], Math.abs(h[i]-c[i-1]), Math.abs(l[i]-c[i-1]));
+  const atr = ewm(tr, 1/cfg.atrLen);
+  const fast = ewm(c, 2/21), slow = ewm(c, 2/51);
+  const up=new Array(n), dn=new Array(n), pdm=new Array(n), mdm=new Array(n);
+  for (let i=0;i<n;i++){
+    const u = i? h[i]-h[i-1] : 0, d = i? l[i-1]-l[i] : 0;
+    up[i]=u; dn[i]=d; pdm[i] = (u>d && u>0) ? u : 0; mdm[i] = (d>u && d>0) ? d : 0;
+  }
+  const pdmE = ewm(pdm, 1/14), mdmE = ewm(mdm, 1/14);
+  const pdi = pdmE.map((x,i)=>100*x/atr[i]), mdi = mdmE.map((x,i)=>100*x/atr[i]);
+  const dx = pdi.map((x,i)=>{ const s=x+mdi[i]; return s>0 ? 100*Math.abs(x-mdi[i])/s : NaN; });
+  const dxClean = dx.map(x=>Number.isFinite(x)?x:0);
+  const adx = ewm(dxClean, 1/14);
+  const diff = up.map((x,i)=>Math.max(x,0)), dn2 = up.map((x,i)=>Math.max(-x,0));
+  // RSI uses close-to-close, computed separately below
+  const chg = new Array(n).fill(0); for (let i=1;i<n;i++) chg[i]=c[i]-c[i-1];
+  const gain = chg.map(x=>Math.max(x,0)), loss = chg.map(x=>Math.max(-x,0));
+  const gE = ewm(gain, 1/14), lE = ewm(loss, 1/14);
+  const rsi = gE.map((g,i)=> lE[i]>0 ? 100-100/(1+g/lE[i]) : 100);
+
+  const hi24 = rollMax(h,24), lo24 = rollMin(l,24);
+  const vMean = rollMean(v,50), vStd = rollStd(v,50), atrMean100 = rollMean(atr,100);
+
+  const feat = [];
+  for (let i=0;i<n;i++){
+    const row = {};
+    [1,3,6,12,24].forEach(k=>{
+      row["ret_"+k] = i>=k ? Math.log(c[i]/c[i-k])/(atr[i]/c[i]) : NaN;
+    });
+    row.dist_fast = (c[i]-fast[i])/atr[i];
+    row.dist_slow = (c[i]-slow[i])/atr[i];
+    row.ema_spread = (fast[i]-slow[i])/atr[i];
+    row.atr_pct = atr[i]/c[i];
+    row.atr_ratio = atrMean100[i] ? atr[i]/atrMean100[i] : NaN;
+    row.adx = adx[i]; row.di_diff = pdi[i]-mdi[i]; row.rsi = rsi[i];
+    row.body = (c[i]-o[i])/atr[i];
+    row.upper_wick = (h[i]-Math.max(o[i],c[i]))/atr[i];
+    row.lower_wick = (Math.min(o[i],c[i])-l[i])/atr[i];
+    row.range_pos = (hi24[i]-lo24[i]) ? (c[i]-lo24[i])/(hi24[i]-lo24[i]) : NaN;
+    row.vol_z = vStd[i] ? (v[i]-vMean[i])/vStd[i] : 0;
+    feat.push(row);
+  }
+  return { feat, atr, close:c, open:o, high:h, low:l };
+}
+const FEAT_NAMES = ["ret_1","ret_3","ret_6","ret_12","ret_24","dist_fast","dist_slow","ema_spread",
+  "atr_pct","atr_ratio","adx","di_diff","rsi","body","upper_wick","lower_wick","range_pos","vol_z"];
+
+function rowValid(row){ return FEAT_NAMES.every(k=>Number.isFinite(row[k])); }
+
+// triple-barrier labels — verified against the Python/desktop engine
+function tripleBarrier(open, high, low, atr, cfg){
+  const n = open.length, H = cfg.horizon;
+  const entry = new Array(n).fill(NaN);
+  for (let i=0;i<n-1;i++) entry[i]=open[i+1];
+  const yl=new Array(n).fill(0), ys=new Array(n).fill(0);
+  const dl=new Array(n).fill(false), ds=new Array(n).fill(false);
+  const lTp=entry.map((e,i)=>e+cfg.tpAtr*atr[i]), lSl=entry.map((e,i)=>e-cfg.slAtr*atr[i]);
+  const sTp=entry.map((e,i)=>e-cfg.tpAtr*atr[i]), sSl=entry.map((e,i)=>e+cfg.slAtr*atr[i]);
+  for (let k=1;k<=H;k++) for (let i=0;i<n-k;i++){
+    const hk=high[i+k], lk=low[i+k];
+    if (!dl[i]){ const stop=lk<=lSl[i]; const tgt=!stop && hk>=lTp[i]; if(tgt) yl[i]=1; if(stop||tgt) dl[i]=true; }
+    if (!ds[i]){ const stop=hk>=sSl[i]; const tgt=!stop && lk<=sTp[i]; if(tgt) ys[i]=1; if(stop||tgt) ds[i]=true; }
+  }
+  const valid=new Array(n).fill(false);
+  for (let i=0;i<n-H;i++) valid[i]=Number.isFinite(atr[i]) && Number.isFinite(entry[i]);
+  return {yl, ys, valid};
+}
+
+// tiny logistic regression, gradient descent, z-scored features
+function trainLogReg(X, y, idx, lr, iters, l2){
+  const d = FEAT_NAMES.length;
+  const mean=new Array(d).fill(0), std=new Array(d).fill(1);
+  for (let j=0;j<d;j++){ let s=0; idx.forEach(i=>s+=X[i][j]); mean[j]=s/idx.length; }
+  for (let j=0;j<d;j++){ let s=0; idx.forEach(i=>s+=(X[i][j]-mean[j])**2); std[j]=Math.sqrt(s/idx.length)||1; }
+  const clip4 = z => Math.max(-4, Math.min(4, z));   // stops one freak candle from pushing the odds to 0% or 100%
+  const Z = idx.map(i=>X[i].map((v,j)=>clip4((v-mean[j])/std[j])));
+  const Y = idx.map(i=>y[i]);
+  let w = new Array(d).fill(0), b = 0;
+  const N = Z.length;
+  for (let t=0;t<iters;t++){
+    const gw = new Array(d).fill(0); let gb = 0;
+    for (let i=0;i<N;i++){
+      let z = b; for (let j=0;j<d;j++) z += w[j]*Z[i][j];
+      const p = 1/(1+Math.exp(-z)); const e = p - Y[i];
+      for (let j=0;j<d;j++) gw[j] += e*Z[i][j];
+      gb += e;
+    }
+    for (let j=0;j<d;j++) w[j] -= lr*(gw[j]/N + l2*w[j]);
+    b -= lr*(gb/N);
+  }
+  return { w, b, mean, std, predict(x){
+    let z = b; for (let j=0;j<x.length;j++) z += w[j]*clip4((x[j]-mean[j])/std[j]);
+    return 1/(1+Math.exp(-z));
+  }};
+}
+
+// ---------- engine / risk / sizing ----------
+const CFG = { atrLen:14, tpAtr:2.0, slAtr:1.0, horizon:24, fee:0.0005, slippage:0.0003 };
+
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+
+function checkDayRoll(equity){
+  const d = todayStr();
+  if (S.dayDate !== d){ S.dayDate = d; S.dayStartEquity = equity; S.dayBlocked = false; }
+  if (S.equityPeak == null) S.equityPeak = equity;
+  S.equityPeak = Math.max(S.equityPeak, equity);
+}
+function riskStatus(equity){
+  checkDayRoll(equity);
+  const dd = (S.equityPeak - equity) / S.equityPeak;
+  const dayLoss = (S.dayStartEquity - equity) / S.dayStartEquity;
+  if (dd >= S.maxDd/100) S.halted = true;
+  if (dayLoss >= S.dailyCap/100) S.dayBlocked = true;
+  saveState(S);
+  return { dd, dayLoss, halted: !!S.halted, dayBlocked: !!S.dayBlocked };
+}
+
+// ---------- exchange info / rounding ----------
+let symbolFilters = null;
+async function getFilters(symbol){
+  if (symbolFilters && symbolFilters.symbol === symbol) return symbolFilters;
+  const info = await binancePublic("/api/v3/exchangeInfo", { symbol });
+  const s = info.symbols[0];
+  const lot = s.filters.find(f=>f.filterType==="LOT_SIZE");
+  const notional = s.filters.find(f=>f.filterType==="MIN_NOTIONAL" || f.filterType==="NOTIONAL");
+  const price = s.filters.find(f=>f.filterType==="PRICE_FILTER");
+  symbolFilters = { symbol, stepSize: parseFloat(lot.stepSize), tickSize: parseFloat(price.tickSize),
+    minNotional: parseFloat(notional ? (notional.minNotional||notional.notional) : 10),
+    baseAsset: s.baseAsset, quoteAsset: s.quoteAsset };
+  return symbolFilters;
+}
+function roundToStep(value, step){
+  const p = Math.round(Math.log10(1/step));
+  const r = Math.floor(value/step)*step;
+  return parseFloat(r.toFixed(Math.max(p,0)));
+}
+
+// ---------- main pipeline ----------
+let busy = false;
+document.getElementById("analyzeBtn").addEventListener("click", async ()=>{
+  if (busy) return; busy = true;
+  const btn = document.getElementById("analyzeBtn"); btn.disabled = true; btn.textContent = "Working…";
+  try { await analyzeAndTrade(); }
+  catch(e){ toast(e.message || String(e), true); }
+  finally { busy = false; btn.disabled = false; btn.textContent = "Analyze & Trade"; renderHistory(); loadChart(); }
+});
+
+async function fetchCandles(){
+  const raw = await binancePublic("/api/v3/klines", { symbol:S.symbol, interval:S.interval, limit:700 });
+  const rows = raw.slice(0, -1); // drop the still-forming candle
+  return rows.map(r=>({ t:r[0], o:+r[1], h:+r[2], l:+r[3], c:+r[4], v:+r[5] }));
+}
+
+// Equity = cash + the coins THIS APP bought. Any other coins in the account (a long-term BTC holding, or the
+// starting coins testnet hands out) are ignored, so they never block a trade, count as profit/loss, or get sold.
+async function getEquity(filters, botOpen){
+  const acc = await binanceSigned("/api/v3/account", {}, "GET");
+  const free = {}, total = {};
+  acc.balances.forEach(b=>{ free[b.asset] = parseFloat(b.free); total[b.asset] = parseFloat(b.free) + parseFloat(b.locked); });
+  const quoteFree = free[filters.quoteAsset] || 0, quoteTotal = total[filters.quoteAsset] || 0;
+  const base = total[filters.baseAsset] || 0;
+  const price = parseFloat((await binancePublic("/api/v3/ticker/price", { symbol:S.symbol })).price);
+  const botQty = (botOpen && S.openPos) ? Math.min(S.openPos.qty, base) : 0;
+  return { equity: quoteTotal + botQty*price, quote: quoteFree, base, price };
+}
+
+function showPosition(open){
+  const card = document.getElementById("posCard");
+  const show = !!(open && S.openPos);
+  card.hidden = !show;
+  if (show){
+    document.getElementById("posEntry").textContent = S.openPos.entry.toFixed(4);
+    document.getElementById("posSl").textContent = S.openPos.sl.toFixed(4);
+    document.getElementById("posTp").textContent = S.openPos.tp.toFixed(4);
+    document.getElementById("posQty").textContent = S.openPos.qty;
+  }
+}
+
+// How did the exchange close a trade this app opened? Looks up the filled stop or target order.
+// Returns { exit, reason, exitAt } or null when no such fill exists (it may be gone after a testnet reset).
+async function findExitFill(pos){
+  const orders = await binanceSigned("/api/v3/allOrders",
+    { symbol:S.symbol, startTime: pos.openedAt - 1000, limit:50 }, "GET");
+  // only the stop/target pair this app placed (orderListId -1 means "not part of an OCO pair")
+  const o = orders.find(x=>x.side==="SELL" && x.status==="FILLED" && x.orderListId !== -1);
+  if (!o) return null;
+  // The order's "price" field is the LIMIT it was set to (for the stop leg that sits 0.2% under the stop),
+  // not what it really sold at. The real average fill is total proceeds / quantity sold.
+  const sold = parseFloat(o.executedQty), got = parseFloat(o.cummulativeQuoteQty);
+  const exit = (sold > 0 && got > 0) ? got / sold : parseFloat(o.price);
+  const reason = o.type === "LIMIT_MAKER" ? "target"
+               : o.type === "STOP_LOSS_LIMIT" ? "stop"
+               : exit >= pos.tp ? "target" : exit <= pos.sl ? "stop" : "closed";
+  return { exit, reason, exitAt: o.updateTime || o.time || null };
+}
+
+// The stop/target order we placed is gone, so the exchange closed the trade. Find out how, and log it.
+async function recordClosedPosition(){
+  let exit = null, reason = "closed", exitAt = null;
+  try {
+    const f = await findExitFill(S.openPos);
+    if (f){ exit = f.exit; reason = f.reason; exitAt = f.exitAt; }
+  } catch(e){ /* history lookup is best-effort; the trade is still correctly marked closed */ }
+  const pnl = exit != null ? (exit - S.openPos.entry) * S.openPos.qty : null;
+  S.trades.unshift(Object.assign({}, S.openPos, { closedAt: Date.now(), exitAt, exit, reason, pnl }));
+  S.openPos = null; saveState(S); renderHistory();
+}
+
+// Older history rows (saved before exit times and real fill prices were recorded) get fixed once from the exchange.
+async function repairOldTrades(){
+  let changed = false;
+  for (const t of S.trades.slice(0, 10)){
+    if (t.exitAt !== undefined) continue;
+    if (t.reason === "kill switch"){ t.exitAt = t.closedAt || null; changed = true; continue; }
+    try {
+      const f = await findExitFill(t);
+      if (f){ t.exit = f.exit; t.reason = f.reason; t.exitAt = f.exitAt; t.pnl = (f.exit - t.entry) * t.qty; }
+      else t.exitAt = null;                 // nothing left to look up, so do not ask again
+      changed = true;
+    } catch(e){ /* network problem: leave it and try again next time */ }
+  }
+  if (changed){ saveState(S); renderHistory(); }
+}
+
+async function getOpenOrders(){
+  return binanceSigned("/api/v3/openOrders", { symbol:S.symbol }, "GET");
+}
+
+async function analyzeAndTrade(){
+  if (!S.apiKey || !S.apiSecret) throw new Error("Add your API key and secret first.");
+  const filters = await getFilters(S.symbol);
+  const candles = await fetchCandles();
+  if (candles.length < 200) throw new Error("Not enough history yet for this symbol/interval.");
+
+  const { feat, atr, close, open, high, low } = computeAll(candles, CFG);
+  const X = feat.map(r => FEAT_NAMES.map(k=>r[k]));
+  const { yl } = tripleBarrier(open, high, low, atr, CFG);
+  const n = candles.length;
+  const trainEnd = n - CFG.horizon; // purge the last `horizon` rows: their true label isn't known yet
+  const trainIdx = [];
+  for (let i=0;i<trainEnd;i++) if (rowValid(feat[i])) trainIdx.push(i);
+  if (trainIdx.length < 150) throw new Error("Not enough clean history to train yet.");
+
+  const model = trainLogReg(X, yl, trainIdx, 0.3, 300, 0.01);
+  const last = n - 1;
+  if (!rowValid(feat[last])) throw new Error("Latest candle has missing indicators, try again shortly.");
+  const pLong = model.predict(X[last]);
+
+  const price = close[last];
+  const atrLast = atr[last];
+  const rr = CFG.tpAtr / CFG.slAtr;
+  const costR = 2*(CFG.fee + CFG.slippage)*price / (CFG.slAtr*atrLast);
+  const evLong = pLong*rr - (1-pLong) - costR;
+  const wantLong = evLong > S.minEdge;
+
+  document.getElementById("price").textContent = price.toLocaleString(undefined,{maximumFractionDigits:2});
+  const chg = (price/open[last]-1)*100;
+  const chgEl = document.getElementById("chg");
+  chgEl.textContent = (chg>=0?"+":"") + chg.toFixed(2) + "%";
+  chgEl.className = "chg " + (chg>=0?"up":"down");
+  document.getElementById("probLong").textContent = (pLong*100).toFixed(1) + "%";
+  document.getElementById("barLong").style.width = Math.max(2,Math.min(100,pLong*100)) + "%";
+  document.getElementById("signalWhy").textContent =
+    `Expected result if long: ${evLong>=0?"+":""}${evLong.toFixed(2)}R after costs. ` +
+    (wantLong ? "That clears the minimum edge." : "Below the minimum edge — staying flat.");
+
+  const openOrders = await getOpenOrders();
+  const haveOpenOrders = openOrders.length > 0;
+  if (S.openPos && !haveOpenOrders) await recordClosedPosition();   // its stop/target already ran on the exchange
+  const botOpen = !!S.openPos;                                       // a trade this app opened and still protects
+  const { equity, quote, base, price: markPrice } = await getEquity(filters, botOpen);
+  const risk = riskStatus(equity);
+
+  document.getElementById("equity").textContent = equity.toFixed(2) + " " + filters.quoteAsset;
+  document.getElementById("dayPnl").textContent =
+    (equity - S.dayStartEquity >= 0 ? "+" : "") + (equity - S.dayStartEquity).toFixed(2) + " " + filters.quoteAsset;
+  document.getElementById("drawdown").textContent = "-" + (risk.dd*100).toFixed(2) + "%";
+
+  // the pill shows what the model says; the position card shows only a trade this app opened
+  const pill = document.getElementById("sidePill");
+  pill.className = "sidepill " + (risk.halted ? "halt" : wantLong ? "long" : "flat");
+  pill.textContent = risk.halted ? "HALTED" : wantLong ? "BUY SIGNAL" : "NO TRADE";
+  showPosition(botOpen);
+
+  if (risk.halted){
+    if (botOpen) await flattenPosition(filters, base, markPrice);
+    toast("Kill switch is active (drawdown limit hit). No new trades.", true);
+    return;
+  }
+  if (risk.dayBlocked){
+    toast("Daily loss cap hit. No new trades until tomorrow.", true);
+    return;
+  }
+
+  if (botOpen){
+    toast("A trade is already open. Its stop-loss and take-profit are on the exchange, so there is nothing to do.");
+    renderHistory();
+    return;
+  }
+  if (haveOpenOrders){
+    toast("There are open orders on " + S.symbol + " that this app did not place. Cancel them on Binance first so the app does not stack a trade on top.", true);
+    return;
+  }
+
+  if (!wantLong){ toast("No trade: expected edge is below your minimum."); return; }
+
+  const slDist = CFG.slAtr * atrLast, tpDist = CFG.tpAtr * atrLast;
+  const riskAmt = equity * (S.riskPct/100);
+  let qty = Math.min(riskAmt / slDist, quote * 0.95 / price);   // keep 5% of cash back so price movement cannot make the order fail
+  qty = roundToStep(qty, filters.stepSize);
+  if (qty * price < filters.minNotional) { toast("Position size is below the exchange's minimum order. Increase risk % or add funds."); return; }
+
+  const buy = await binanceSigned("/api/v3/order", { symbol:S.symbol, side:"BUY", type:"MARKET", quantity:qty }, "POST");
+  const fills = buy.fills || [];
+  const boughtQty = fills.reduce((s,f)=>s+parseFloat(f.qty),0) || qty;
+  // Binance normally takes its fee out of the coins received, so we own slightly less than we bought.
+  const feeInBase = fills.reduce((s,f)=> s + (f.commissionAsset === filters.baseAsset ? parseFloat(f.commission || 0) : 0), 0);
+  const sellQty = roundToStep(boughtQty - feeInBase, filters.stepSize);
+  const fillPrice = fills.length ? fills.reduce((s,f)=>s+parseFloat(f.price)*parseFloat(f.qty),0)/boughtQty : price;
+  const sl = roundToStep(fillPrice - slDist, filters.tickSize);
+  const tp = roundToStep(fillPrice + tpDist, filters.tickSize);
+  const slLimit = roundToStep(sl*0.998, filters.tickSize);
+
+  try {
+    // current Binance OCO endpoint: take-profit leg above, stop-loss-limit leg below
+    await binanceSigned("/api/v3/orderList/oco", {
+      symbol:S.symbol, side:"SELL", quantity:sellQty,
+      aboveType:"LIMIT_MAKER", abovePrice: tp,
+      belowType:"STOP_LOSS_LIMIT", belowStopPrice: sl, belowPrice: slLimit, belowTimeInForce:"GTC"
+    }, "POST");
+  } catch(e){
+    // never leave a position without a stop: if protection fails, sell right away
+    try {
+      await binanceSigned("/api/v3/order", { symbol:S.symbol, side:"SELL", type:"MARKET", quantity:sellQty }, "POST");
+      toast("The stop/target order was rejected (" + e.message + "), so the position was sold again right away. No trade is open.", true);
+    } catch(e2){
+      toast("DANGER: bought, but stop/target failed (" + e.message + ") and the emergency sell failed (" + e2.message + "). Close the position on the exchange now.", true);
+    }
+    return;
+  }
+
+  S.openPos = { entry: fillPrice, sl, tp, qty: sellQty, openedAt: Date.now() };
+  saveState(S);
+  document.getElementById("posCard").hidden = false;
+  document.getElementById("posEntry").textContent = fillPrice.toFixed(4);
+  document.getElementById("posSl").textContent = sl.toFixed(4);
+  document.getElementById("posTp").textContent = tp.toFixed(4);
+  document.getElementById("posQty").textContent = sellQty;
+  document.getElementById("sidePill").className = "sidepill long";
+  document.getElementById("sidePill").textContent = "LONG";
+  toast(`Bought ${sellQty} ${filters.baseAsset} @ ${fillPrice.toFixed(4)}. Stop ${sl.toFixed(4)}, target ${tp.toFixed(4)}.`);
+}
+
+// Kill switch: sell only the coins this app bought. Other coins in the account are never touched.
+// (Cancelling clears every open order on this symbol, which is the app's stop/target while a trade is open.)
+async function flattenPosition(filters, base, markPrice){
+  if (!S.openPos) return;
+  const qty = roundToStep(Math.min(S.openPos.qty, base), filters.stepSize);
+  try {
+    await binanceSigned("/api/v3/openOrders", { symbol:S.symbol }, "DELETE");
+    let exit = markPrice;
+    if (qty * markPrice >= filters.minNotional){
+      const sell = await binanceSigned("/api/v3/order", { symbol:S.symbol, side:"SELL", type:"MARKET", quantity:qty }, "POST");
+      const f = sell.fills || [];
+      const got = f.reduce((s,x)=>s+parseFloat(x.qty),0);
+      if (got > 0) exit = f.reduce((s,x)=>s+parseFloat(x.price)*parseFloat(x.qty),0) / got;
+    }
+    S.trades.unshift(Object.assign({}, S.openPos, { closedAt: Date.now(), exitAt: Date.now(), exit, reason:"kill switch", pnl:(exit - S.openPos.entry) * S.openPos.qty }));
+    S.openPos = null; saveState(S); renderHistory(); showPosition(false);
+    toast("Kill switch: the app's trade was sold. Your other coins were not touched.", true);
+  } catch(e){ toast("Kill switch fired but selling failed: " + e.message + ". Close the trade on Binance yourself.", true); }
+}
+
+async function refreshAccountAndHistory(){
+  renderHistory();
+  try{
+    const filters = await getFilters(S.symbol);
+    const orders = await getOpenOrders();
+    if (S.openPos && orders.length === 0) await recordClosedPosition();
+    const { equity } = await getEquity(filters, !!S.openPos);
+    checkDayRoll(equity); saveState(S);
+    showPosition(!!S.openPos);
+    renderHistory(); drawChart();
+    document.getElementById("equity").textContent = equity.toFixed(2) + " " + filters.quoteAsset;
+    await repairOldTrades();
+    drawChart();
+  } catch(e){ /* quiet on load; Analyze & Trade will surface errors */ }
+}
+
+function renderHistory(){
+  const list = document.getElementById("logList");
+  const rows = [];
+  if (S.openPos){
+    const p = S.openPos;
+    rows.push(`<div class="logrow"><div class="logleft">
+      <div class="logtime">${new Date(p.openedAt).toLocaleString()}</div>
+      <div class="logwhy">LONG @ ${p.entry.toFixed(4)} · stop ${p.sl.toFixed(4)} · target ${p.tp.toFixed(4)}</div>
+      </div><div class="logpnl open">OPEN</div></div>`);
+  }
+  S.trades.slice(0,25).forEach(t=>{
+    const known = t.pnl != null;
+    const pnlTxt = known ? (t.pnl>=0?"+":"") + t.pnl.toFixed(2) : "?";
+    rows.push(`<div class="logrow"><div class="logleft">
+      <div class="logtime">${new Date(t.openedAt).toLocaleString()}</div>
+      <div class="logwhy">LONG @ ${t.entry.toFixed(4)} → ${t.exit!=null?t.exit.toFixed(4):"?"} (${t.reason||"closed"})</div>
+      </div><div class="logpnl ${known?(t.pnl>=0?"pos":"neg"):""}">${pnlTxt}</div></div>`);
+  });
+  list.innerHTML = rows.length ? rows.join("") : '<div class="empty">No trades yet.</div>';
+}
+
+// ---------- price chart ----------
+const IV_MS = { "15m":900000, "1h":3600000, "4h":14400000 };
+let chartCandles = [], chartRange = 120;
+try { const r = parseInt(localStorage.getItem("signaldesk.range"), 10); if ([48,120,240].includes(r)) chartRange = r; } catch(e){}
+
+async function loadChart(){
+  const note = document.getElementById("chartNote");
+  try {
+    const raw = await binancePublic("/api/v3/klines", { symbol:S.symbol, interval:S.interval, limit:700 });
+    chartCandles = raw.map(r=>({ t:+r[0], o:+r[1], h:+r[2], l:+r[3], c:+r[4] }));
+    note.textContent = "";
+    drawChart();
+  } catch(e){ note.textContent = "Chart unavailable: " + (e.message || e); }
+}
+
+function spanLabel(n){
+  const hrs = n * (IV_MS[S.interval] || 3600000) / 3600000;
+  if (hrs < 48) return Math.round(hrs) + "h";
+  const d = hrs / 24;
+  return (Number.isInteger(d) ? d : d.toFixed(1)) + "d";
+}
+function fmtPrice(p){ return p >= 1000 ? p.toLocaleString(undefined,{maximumFractionDigits:0}) : p >= 1 ? p.toFixed(2) : p.toPrecision(4); }
+
+function drawChart(){
+  document.querySelectorAll("#rangeSeg button").forEach(b=>{
+    const n = +b.dataset.n;
+    b.textContent = spanLabel(n);
+    b.setAttribute("aria-pressed", n === chartRange ? "true" : "false");
+  });
+  const host = document.getElementById("chart");
+  if (chartCandles.length < 5){ host.innerHTML = ""; return; }
+  const ms = IV_MS[S.interval] || 3600000;
+  const n = Math.min(chartRange, chartCandles.length), cs = chartCandles.slice(-n);
+  const W = 340, H = 270, L = 4, R = 56, T = 10, B = 22, pw = W - L - R, ph = H - T - B;
+  const pos = S.openPos;
+  let lo = Math.min(...cs.map(c=>c.l)), hi = Math.max(...cs.map(c=>c.h));
+  if (pos){ lo = Math.min(lo, pos.sl); hi = Math.max(hi, pos.tp); }
+  const pad = (hi - lo) * 0.04 || hi * 0.01; lo -= pad; hi += pad;
+  const X = i => L + (i + 0.5) * pw / n;
+  const Y = p => T + (hi - p) / (hi - lo) * ph;
+  const at = t => Math.min(n - 1, Math.floor((t - cs[0].t) / ms));   // which candle holds time t (null if before the chart)
+  const f = v => v.toFixed(1);
+  // labels for the open trade's levels sit on the right edge; nudge them apart so they never overprint each other
+  const tags = pos ? [["tp", pos.tp, "TP"], ["entry", pos.entry, "IN"], ["sl", pos.sl, "SL"]]
+                       .map(([k,p,tag])=>({ k, p, tag, y:Y(p) })).sort((a,b)=>a.y-b.y) : [];
+  tags.forEach((t,i)=>{ t.ty = i ? Math.max(t.y, tags[i-1].ty + 11) : t.y; });
+  let s = "";
+  for (let k = 0; k <= 4; k++){                                     // price grid + right-hand labels
+    const p = lo + (hi - lo) * k / 4, y = Y(p);
+    const hidden = tags.some(t=>Math.abs(t.ty - y) < 11);          // a level label wins over a plain grid label
+    s += `<line class="grid" x1="${L}" x2="${W-R}" y1="${f(y)}" y2="${f(y)}"/>` +
+         (hidden ? "" : `<text x="${W-R+5}" y="${f(y+3)}">${fmtPrice(p)}</text>`);
+  }
+  [0.1, 0.5, 0.9].forEach(q=>{                                      // time labels
+    const i = Math.round((n - 1) * q);
+    s += `<text x="${f(X(i))}" y="${H-6}" text-anchor="middle">${new Date(cs[i].t).toLocaleString(undefined,{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</text>`;
+  });
+  const bw = Math.max(1, Math.min(8, pw / n * 0.62));
+  cs.forEach((c,i)=>{                                               // candles
+    const up = c.c >= c.o, x = X(i), yo = Y(c.o), yc = Y(c.c);
+    s += `<g class="${up?"cu":"cd"}"><line x1="${f(x)}" x2="${f(x)}" y1="${f(Y(c.h))}" y2="${f(Y(c.l))}"/>` +
+         `<rect class="cb" x="${f(x-bw/2)}" y="${f(Math.min(yo,yc))}" width="${f(bw)}" height="${f(Math.max(1,Math.abs(yo-yc)))}"/></g>`;
+  });
+  tags.forEach(t=>{                                                 // the open trade's three levels
+    s += `<line class="lvl lvl-${t.k}" x1="${L}" x2="${W-R}" y1="${f(t.y)}" y2="${f(t.y)}"/>` +
+         `<text class="tag-${t.k}" x="${W-R+5}" y="${f(t.ty+3)}" style="font-weight:700">${t.tag} ${fmtPrice(t.p)}</text>`;
+  });
+  const tri = (x,y,up) => up ? `M${f(x)} ${f(y-6)} L${f(x+5.5)} ${f(y+4)} L${f(x-5.5)} ${f(y+4)} Z`
+                             : `M${f(x-5.5)} ${f(y-4)} L${f(x+5.5)} ${f(y-4)} L${f(x)} ${f(y+6)} Z`;
+  const all = (pos ? [Object.assign({}, pos, {exit:null, exitAt:null})] : []).concat(S.trades);
+  let marks = "";
+  all.forEach(t=>{                                                  // buy / sell markers
+    const ie = t.openedAt >= cs[0].t ? at(t.openedAt) : null;
+    const ix = (t.exit != null && t.exitAt) && t.exitAt >= cs[0].t ? at(t.exitAt) : null;
+    const cls = t.pnl == null ? "flat" : t.pnl >= 0 ? "pos" : "neg";
+    if (ie != null && ix != null)
+      marks += `<line class="link ${cls}" x1="${f(X(ie))}" y1="${f(Y(t.entry))}" x2="${f(X(ix))}" y2="${f(Y(t.exit))}"/>`;
+    if (ie != null) marks += `<path class="mk-buy" data-price="${t.entry}" d="${tri(X(ie), Y(t.entry), true)}"/>`;
+    if (ix != null) marks += `<path class="mk-sell ${cls}" data-price="${t.exit}" d="${tri(X(ix), Y(t.exit), false)}"/>`;
+  });
+  const last = cs[cs.length-1];
+  host.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${n} candles of ${S.interval} for ${S.symbol}, last close ${fmtPrice(last.c)}">${s}${marks}</svg>`;
+}
+
+document.getElementById("rangeSeg").addEventListener("click", e=>{
+  const b = e.target.closest("button"); if (!b) return;
+  chartRange = +b.dataset.n;
+  try { localStorage.setItem("signaldesk.range", String(chartRange)); } catch(err){}
+  drawChart();
+});
+
+// ---------- boot ----------
+fillForm();
+if (S.apiKey && S.apiSecret){
+  document.getElementById("mainCard").hidden = false;
+  document.getElementById("chartCard").hidden = false;
+  document.getElementById("analyzeBtn").hidden = false;
+  document.getElementById("accountCard").hidden = false;
+  document.getElementById("historyCard").hidden = false;
+  refreshAccountAndHistory();
+  loadChart();
+}
+})();
+</script>
+
+<script>
+if ("serviceWorker" in navigator) { window.addEventListener("load", function(){ navigator.serviceWorker.register("sw.js").catch(function(){}); }); }
+</script>
+</body></html>
